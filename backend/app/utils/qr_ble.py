@@ -5,11 +5,11 @@ from typing import Tuple
 
 def generate_session_token() -> Tuple[str, str]:
     """
-    Generates a secure random session token and returns (raw_token, token_hash).
-    The raw token is transmitted via BLE / session activation payload.
+    Generates a secure 16-hex-character session token and returns (raw_token, token_hash).
+    The raw token fits securely in standard BLE advertising packets.
     Only the SHA-256 hash is persisted in the database.
     """
-    raw_token = secrets.token_urlsafe(32)
+    raw_token = secrets.token_hex(8)
     token_hash = hash_session_token(raw_token)
     return raw_token, token_hash
 

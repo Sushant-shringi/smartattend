@@ -44,5 +44,6 @@ data class TeacherSessionEntity(
     val startTime: String,
     val expiryTime: String,
     val durationMinutes: Int,
-    val status: String // ACTIVE, STOPPED
+    val status: String, // ACTIVE, STOPPED
+    val rawSessionToken: String? = null
 )

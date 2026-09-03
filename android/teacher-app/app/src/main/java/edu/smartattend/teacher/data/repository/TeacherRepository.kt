@@ -76,7 +76,7 @@ class TeacherRepository(
             } else if (cached != null) {
                 Result.failure(Exception("Cannot reach server at ${TeacherApiClient.getBaseUrl()}. Offline password invalid."))
             } else {
-                Result.failure(Exception("Cannot reach server at ${TeacherApiClient.getBaseUrl()}.\nError: ${e.localizedMessage ?: "Network connection failed"}.\nPlease verify your phone is on the same Wi-Fi network and check Server URL settings."))
+                Result.failure(Exception("Cannot reach server at ${TeacherApiClient.getBaseUrl()}.\n${e.localizedMessage ?: "Connection timeout"}.\nIf the cloud server was sleeping, please retry in a moment."))
             }
         }
     }
@@ -161,7 +161,8 @@ class TeacherRepository(
                     startTime = body.startTime,
                     expiryTime = body.expiryTime,
                     durationMinutes = durationMinutes,
-                    status = "ACTIVE"
+                    status = "ACTIVE",
+                    rawSessionToken = body.rawSessionToken
                 )
                 sessionDao.insertSession(session)
                 return Result.success(session)
@@ -170,7 +171,7 @@ class TeacherRepository(
             // Fall through to offline session creation
         }
 
-        // Local Offline Session Fallback
+        // Local Offline Session Fallback with 16-hex char token
         val localSession = TeacherSessionEntity(
             sessionId = UUID.randomUUID().toString(),
             subjectId = classItem.subjectId,
@@ -181,7 +182,8 @@ class TeacherRepository(
             startTime = startTime,
             expiryTime = expiryTime,
             durationMinutes = durationMinutes,
-            status = "ACTIVE"
+            status = "ACTIVE",
+            rawSessionToken = UUID.randomUUID().toString().replace("-", "").take(16)
         )
         sessionDao.insertSession(localSession)
         return Result.success(localSession)

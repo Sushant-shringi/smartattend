@@ -284,7 +284,7 @@ fun TeacherLoginScreen(
                             text = {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text(
-                                        "Enter your backend FastAPI IP & port (e.g. http://10.34.92.77:8000/api/v1/):",
+                                        "Enter your backend API URL (Production: https://smartattend-ab65.onrender.com/api/v1/):",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                     OutlinedTextField(
@@ -1693,7 +1693,7 @@ fun TeacherProfileScreen(
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     TeacherInfoRow(Icons.Default.School, "Department", "Master of Computer Applications (MCA)")
                     Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                    TeacherInfoRow(Icons.Default.Dns, "Backend Server API", "http://192.168.1.8:8000/api/v1")
+                    TeacherInfoRow(Icons.Default.Dns, "Backend Server API", edu.smartattend.teacher.data.api.TeacherApiClient.getBaseUrl())
                     Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     TeacherInfoRow(Icons.Default.BluetoothAudio, "BLE Advertising Protocol", "Custom Classroom Beacon Broadcaster")
                 }

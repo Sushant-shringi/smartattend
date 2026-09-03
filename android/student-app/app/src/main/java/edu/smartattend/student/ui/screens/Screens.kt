@@ -288,7 +288,7 @@ fun LoginScreen(
                             text = {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text(
-                                        "Enter your backend FastAPI IP & port (e.g. http://10.34.92.77:8000/api/v1/):",
+                                        "Enter your backend API URL (Production: https://smartattend-ab65.onrender.com/api/v1/):",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                     OutlinedTextField(
@@ -1371,13 +1371,13 @@ fun AttendanceScannerScreen(
                             onMarkOfflineAttendance(matchingBeacon)
                             attendanceConfirmed = PendingAttendanceEntity(
                                 attendanceId = UUID.randomUUID().toString(),
-                                sessionId = "offline-session-${timetableItem.subjectId}",
+                                sessionId = matchingBeacon.sessionId ?: timetableItem.id,
                                 subjectId = timetableItem.subjectId,
                                 subjectCode = timetableItem.subjectCode,
                                 subjectName = timetableItem.subjectName,
                                 classroomId = timetableItem.classroomId,
                                 classroomName = timetableItem.classroomName,
-                                sessionToken = "valid-ble-proximity-token",
+                                sessionToken = matchingBeacon.sessionToken ?: "",
                                 bleRssi = matchingBeacon.rssi,
                                 markedAt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date()),
                                 syncStatus = "PENDING_SYNC"
@@ -1857,7 +1857,7 @@ fun StudentProfileScreen(
                     Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     ProfileInfoRow(Icons.Default.Layers, "Semester & Section", "Semester ${user.semesterNumber ?: 2} • Section ${user.sectionName ?: "A"}")
                     Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                    ProfileInfoRow(Icons.Default.Dns, "Backend API Server", "http://192.168.1.8:8000/api/v1")
+                    ProfileInfoRow(Icons.Default.Dns, "Backend API Server", edu.smartattend.student.data.api.ApiClient.getBaseUrl())
                     Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     ProfileInfoRow(Icons.Default.Security, "Authentication Mode", "Offline-First JWT with Local Credential Caching")
                 }

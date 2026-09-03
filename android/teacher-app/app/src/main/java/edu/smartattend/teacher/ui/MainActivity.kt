@@ -340,7 +340,8 @@ class MainActivity : ComponentActivity() {
                                                     authToken = teacher.authToken
                                                 )
                                                 if (sessionResult.isSuccess) {
-                                                    activeSession = sessionResult.getOrNull()
+                                                    val session = sessionResult.getOrNull()
+                                                    activeSession = session
                                                     bleAdvertiserManager.startAdvertising(classItem.bleIdentifier)
                                                     Toast.makeText(this@MainActivity, "BLE Broadcast Active: ${classItem.bleIdentifier}", Toast.LENGTH_SHORT).show()
                                                     navController.navigate("session")

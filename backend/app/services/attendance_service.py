@@ -145,15 +145,17 @@ def validate_and_record_attendance(
         raise HTTPException(status_code=403, detail="Student account is not active")
 
     # 3. Session validation
-    session = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
-    is_offline_marker = not session_id or session_id.startswith("offline") or "offline" in session_id.lower()
-    if not session and is_offline_marker and subject_id and classroom_id:
-        # True offline fallback: match session by subject_id & classroom_id
+    session = None
+    if session_id:
+        session = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
+
+    if not session and subject_id and classroom_id:
+        # Resolve active or matching session for this subject and classroom
         session_query = db.query(AttendanceSession).filter(
             AttendanceSession.subject_id == subject_id,
             AttendanceSession.classroom_id == classroom_id
         )
-        # 1. Match current ACTIVE session
+        # 1. Match current ACTIVE session started by teacher
         session = session_query.filter(AttendanceSession.status == SessionStatus.ACTIVE).order_by(AttendanceSession.start_time.desc()).first()
         if not session:
             # 2. Match session that was active at the time the student marked attendance
@@ -185,25 +187,25 @@ def validate_and_record_attendance(
                 detail="Attendance timestamp is outside the active session time window. Attendance rejected."
             )
 
-    # 4. Token validation
-    demo_token_ok = (
-        settings.DEMO_ATTENDANCE_MODE
-        and (
-            session_token in ("valid-ble-proximity-token", "simulated-offline-token", "offline-token")
-            or not session_token
-        )
-        and verification_source == "BLE"
+    # 4. Proximity / Token verification
+    # Physical classroom BLE proximity verification
+    ble_proximity_ok = (
+        verification_source == "BLE"
+        and ble_rssi is not None
+        and ble_rssi >= (session.rssi_threshold or -85)
     )
-    if not verify_session_token(session_token, session.session_token_hash) and not demo_token_ok:
+    token_ok = bool(session_token and verify_session_token(session_token, session.session_token_hash))
+
+    if not token_ok and not ble_proximity_ok:
         create_audit_log(
             db=db,
             action="ATTENDANCE_REJECTED",
             status="FAILURE",
             entity="AttendanceSession",
             entity_id=session.id,
-            message=f"Invalid session token submitted by student {student.student_id}"
+            message=f"Invalid proximity/token submitted by student {student.student_id}"
         )
-        raise HTTPException(status_code=400, detail="Invalid session token. Attendance rejected.")
+        raise HTTPException(status_code=400, detail="Invalid session token or unverified proximity. Attendance rejected.")
 
     # Check duplicate by resolved session.id and student_id
     existing_record = db.query(AttendanceRecord).filter(

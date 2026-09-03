@@ -79,7 +79,7 @@ class AuthRepository(
             } else if (cachedUser != null) {
                 Result.failure(Exception("Cannot reach server at ${ApiClient.getBaseUrl()}. Offline password does not match cached credentials."))
             } else {
-                Result.failure(Exception("Cannot reach server at ${ApiClient.getBaseUrl()}.\nError: ${e.localizedMessage ?: "Network connection failed"}.\nPlease verify your phone is on the same Wi-Fi network and check Server URL settings."))
+                Result.failure(Exception("Cannot reach server at ${ApiClient.getBaseUrl()}.\n${e.localizedMessage ?: "Connection timeout"}.\nIf the cloud server was sleeping, please retry in a moment."))
             }
         }
     }

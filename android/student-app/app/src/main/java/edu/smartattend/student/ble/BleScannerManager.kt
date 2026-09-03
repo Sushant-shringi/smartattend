@@ -18,7 +18,9 @@ data class DiscoveredBeacon(
     val deviceName: String,
     val deviceAddress: String,
     val rssi: Int,
-    val isSignalAcceptable: Boolean // RSSI >= -85 dBm
+    val isSignalAcceptable: Boolean, // RSSI >= -85 dBm
+    val sessionId: String? = null,    // REAL Teacher session ID from BLE air packet
+    val sessionToken: String? = null  // REAL dynamic token from teacher broadcast
 )
 
 class BleScannerManager(private val context: Context) {
@@ -46,28 +48,49 @@ class BleScannerManager(private val context: Context) {
             val rawName = scanRecord?.deviceName ?: device.name ?: ""
             val rssi = result.rssi
 
-            // Check if beacon identifier is provided in service data
+            // Check if beacon identifier, real session ID & session token are provided in service data
             val serviceData = scanRecord?.getServiceData(PARCEL_SERVICE_UUID)
-            val serviceDataName = if (serviceData != null && serviceData.isNotEmpty()) {
+            val serviceDataStr = if (serviceData != null && serviceData.isNotEmpty()) {
                 String(serviceData, StandardCharsets.UTF_8)
             } else null
 
-            val effectiveName = when {
-                serviceDataName != null && serviceDataName.isNotBlank() -> serviceDataName
+            val rawPayload = when {
+                serviceDataStr != null && serviceDataStr.isNotBlank() -> serviceDataStr
                 rawName.isNotBlank() -> rawName
                 else -> null
             }
 
-            // Filter for SmartAttend classroom beacons
-            if (effectiveName != null && (effectiveName.startsWith("SMARTATTEND-") || effectiveName.contains("SMARTATTEND"))) {
-                val beacon = DiscoveredBeacon(
-                    deviceName = effectiveName,
-                    deviceAddress = device.address,
-                    rssi = rssi,
-                    isSignalAcceptable = rssi >= -85
-                )
-                discoveredMap[device.address] = beacon
-                _scanState.value = discoveredMap.values.toList()
+            if (rawPayload != null) {
+                // Parse payload format: "SMARTATTEND-RM204#<sessionId>#<token>" or "SMARTATTEND-RM204#<token>" or "SMARTATTEND-RM204"
+                var beaconName = rawPayload
+                var sId: String? = null
+                var sToken: String? = null
+
+                if (rawPayload.contains("#")) {
+                    val parts = rawPayload.split("#")
+                    if (parts.size >= 3) {
+                        beaconName = parts[0]
+                        sId = parts[1].trim()
+                        sToken = parts[2].trim()
+                    } else if (parts.size == 2) {
+                        beaconName = parts[0]
+                        sToken = parts[1].trim()
+                    }
+                }
+
+                // Filter strictly for authentic SmartAttend classroom BLE beacons
+                if (beaconName.startsWith("SMARTATTEND-") || beaconName.contains("SMARTATTEND")) {
+                    val beacon = DiscoveredBeacon(
+                        deviceName = beaconName,
+                        deviceAddress = device.address,
+                        rssi = rssi,
+                        isSignalAcceptable = rssi >= -85,
+                        sessionId = if (!sId.isNullOrBlank()) sId else null,
+                        sessionToken = if (!sToken.isNullOrBlank()) sToken else null
+                    )
+                    discoveredMap[device.address] = beacon
+                    _scanState.value = discoveredMap.values.toList()
+                }
             }
         }
 
@@ -98,20 +121,5 @@ class BleScannerManager(private val context: Context) {
             // Ignore if already stopped
         }
         _isScanning.value = false
-    }
-
-    /**
-     * For demonstration & offline testing without physical BLE peripherals:
-     * simulates discovering a classroom beacon at a verified RSSI.
-     */
-    fun simulateDiscoveredBeacon(beaconName: String = "SMARTATTEND-RM204", rssi: Int = -62) {
-        val simulated = DiscoveredBeacon(
-            deviceName = beaconName,
-            deviceAddress = "00:11:22:33:44:55",
-            rssi = rssi,
-            isSignalAcceptable = rssi >= -85
-        )
-        discoveredMap[simulated.deviceAddress] = simulated
-        _scanState.value = discoveredMap.values.toList()
     }
 }

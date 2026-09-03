@@ -9,7 +9,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 object ApiClient {
-    const val DEFAULT_BASE_URL = "http://10.34.92.77:8000/api/v1/"
+    const val DEFAULT_BASE_URL = "https://smartattend-ab65.onrender.com/api/v1/"
     private const val PREFS_NAME = "smartattend_student_prefs"
     private const val KEY_BASE_URL = "backend_base_url"
 
@@ -19,7 +19,12 @@ object ApiClient {
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val savedUrl = prefs?.getString(KEY_BASE_URL, DEFAULT_BASE_URL) ?: DEFAULT_BASE_URL
-        setBaseUrl(savedUrl)
+        // Automatically migrate any legacy local development IPs to production Render URL
+        if (savedUrl.contains("192.168.") || savedUrl.contains("10.34.") || savedUrl.contains("localhost") || savedUrl.contains("127.0.0.1")) {
+            setBaseUrl(DEFAULT_BASE_URL)
+        } else {
+            setBaseUrl(savedUrl)
+        }
     }
 
     fun getBaseUrl(): String = baseUrl
@@ -36,9 +41,10 @@ object ApiClient {
     }
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(12, TimeUnit.SECONDS)
-        .writeTimeout(12, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .addInterceptor(loggingInterceptor)
         .build()
 

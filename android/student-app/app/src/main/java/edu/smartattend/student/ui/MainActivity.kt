@@ -341,13 +341,13 @@ class MainActivity : ComponentActivity() {
                                         onMarkOfflineAttendance = { beacon ->
                                             lifecycleScope.launch {
                                                 attendanceRepository.markAttendanceOffline(
-                                                    sessionId = "offline-session-${selectedItem.subjectId}",
+                                                    sessionId = beacon.sessionId ?: selectedItem.id,
                                                     subjectId = selectedItem.subjectId,
                                                     subjectCode = selectedItem.subjectCode,
                                                     subjectName = selectedItem.subjectName,
                                                     classroomId = selectedItem.classroomId,
                                                     classroomName = selectedItem.classroomName,
-                                                    sessionToken = "valid-ble-proximity-token",
+                                                    sessionToken = beacon.sessionToken ?: "",
                                                     bleRssi = beacon.rssi
                                                 )
                                                 bleScannerManager.stopScan()
