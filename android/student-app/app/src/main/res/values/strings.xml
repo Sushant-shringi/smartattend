@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">SmartAttend Student</string>
+    <string name="login_title">Student Attendance</string>
+    <string name="login_subtitle">Offline-First BLE Attendance System</string>
+    <string name="sync_status_synced">Synced with Server</string>
+    <string name="sync_status_pending">Pending Offline Sync</string>
+</resources>

@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: smartattend-postgres
+    environment:
+      - POSTGRES_USER=smartattend
+      - POSTGRES_PASSWORD=smartattend123
+      - POSTGRES_DB=smartattend_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smartattend -d smartattend_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: smartattend-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://smartattend:smartattend123@postgres:5432/smartattend_db
+      - SECRET_KEY=smartattend-production-super-secret-key-change-in-prod
+      - REFRESH_SECRET_KEY=smartattend-production-refresh-super-secret-key
+      - CORS_ORIGINS=["http://localhost:5173", "http://localhost:3000", "http://localhost:80"]
+    volumes:
+      - ./backend/app:/app/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: smartattend-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+

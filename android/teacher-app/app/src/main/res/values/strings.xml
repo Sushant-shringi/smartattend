@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">SmartAttend Faculty</string>
+    <string name="teacher_login_title">Teacher Portal</string>
+    <string name="teacher_login_subtitle">Offline-First Lecture &amp; Beacon Manager</string>
+</resources>
