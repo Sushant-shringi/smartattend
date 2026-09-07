@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
                             } catch (e: Exception) {
                                 // Silent retry
                             }
-                            delay(4000)
+                            delay(2000)
                         }
                     }
                 }
@@ -420,6 +420,14 @@ class MainActivity : ComponentActivity() {
                             composable("roster") {
                                 val session = activeSession
                                 val teacher = currentTeacher
+                                LaunchedEffect(session?.sessionId, teacher?.authToken) {
+                                    if (session != null && teacher != null) {
+                                        val res = teacherRepository.fetchLiveAttendance(session.sessionId, teacher.authToken)
+                                        if (res.isSuccess) {
+                                            liveSummary = res.getOrNull()
+                                        }
+                                    }
+                                }
                                 if (session != null && teacher != null) {
                                     LiveRosterScreen(
                                         sessionName = session.subjectName,

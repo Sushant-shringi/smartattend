@@ -127,10 +127,18 @@ def get_live_attendance(
     students_query = db.query(Student).filter(Student.semester_id == session.semester_id)
     if session.section_id:
         students_query = students_query.filter(Student.section_id == session.section_id)
-    enrolled_students = students_query.all()
+    enrolled_students = list(students_query.all())
 
     # Marked attendance records for this session
     marked_records = {r.student_id: r for r in db.query(AttendanceRecord).filter(AttendanceRecord.session_id == session_id).all()}
+
+    # Ensure any student who marked attendance in this session is always included in the live roster
+    marked_student_ids = set(marked_records.keys())
+    existing_enrolled_ids = {s.id for s in enrolled_students}
+    missing_student_ids = marked_student_ids - existing_enrolled_ids
+    if missing_student_ids:
+        extra_students = db.query(Student).filter(Student.id.in_(missing_student_ids)).all()
+        enrolled_students.extend(extra_students)
 
     items: List[LiveStudentAttendanceItem] = []
     present_cnt = 0
@@ -168,6 +176,15 @@ def get_live_attendance(
                 ble_rssi=None,
                 sync_status=None
             ))
+
+    # Sort items: PRESENT first, then LATE, then ABSENT, then by name
+    status_priority = {
+        AttendanceStatus.PRESENT: 0,
+        AttendanceStatus.LATE: 1,
+        AttendanceStatus.ABSENT: 2,
+        AttendanceStatus.REJECTED: 3
+    }
+    items.sort(key=lambda x: (status_priority.get(x.status, 9), x.full_name))
 
     return LiveAttendanceSummary(
         session=AttendanceSessionResponse.model_validate(session),

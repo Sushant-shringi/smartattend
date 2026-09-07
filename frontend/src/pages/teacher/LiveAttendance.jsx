@@ -27,7 +27,8 @@ export const LiveAttendance = () => {
   const { showToast } = useToast();
   const navigate = useNavigate();
 
-  const fetchLiveSession = async () => {
+  const fetchLiveSession = async (showLoading = false) => {
+    if (showLoading) setIsLoading(true);
     try {
       const active = await attendanceService.getActiveTeacherSession();
       setActiveSession(active);
@@ -38,22 +39,35 @@ export const LiveAttendance = () => {
         setLiveData(null);
       }
     } catch (e) {
-      console.error(e);
+      console.error('Error fetching live session:', e);
     } finally {
-      setIsLoading(false);
+      if (showLoading) setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchLiveSession();
-    // Real-time live polling every 4 seconds while session is active
-    const pollInterval = setInterval(() => {
-      if (activeSession) {
-        attendanceService.getLiveAttendance(activeSession.id)
-          .then(setLiveData)
-          .catch(console.warn);
+    // Initial fetch with loader
+    fetchLiveSession(true);
+
+    // Active polling every 2 seconds while live roster is open
+    const pollInterval = setInterval(async () => {
+      try {
+        if (activeSession?.id) {
+          const live = await attendanceService.getLiveAttendance(activeSession.id);
+          setLiveData(live);
+        } else {
+          // If activeSession not yet loaded or changed, refresh active session
+          const active = await attendanceService.getActiveTeacherSession();
+          if (active) {
+            setActiveSession(active);
+            const live = await attendanceService.getLiveAttendance(active.id);
+            setLiveData(live);
+          }
+        }
+      } catch (err) {
+        console.warn('Live roster poll error:', err);
       }
-    }, 4000);
+    }, 2000);
 
     return () => clearInterval(pollInterval);
   }, [activeSession?.id]);
