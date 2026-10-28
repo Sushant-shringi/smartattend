@@ -47,3 +47,16 @@ data class TeacherSessionEntity(
     val status: String, // ACTIVE, STOPPED
     val rawSessionToken: String? = null
 )
+
+@Entity(tableName = "local_ble_attendance")
+data class LocalBleAttendanceEntity(
+    @PrimaryKey val attendanceId: String, // Stable event_id / attendance_id
+    val sessionId: String,
+    val studentId: String,
+    val rollNumber: String,
+    val fullName: String,
+    val markedAt: String,
+    val bleRssi: Int?,
+    val syncStatus: String = "BLE_OFFLINE",
+    val receivedTimestamp: Long = System.currentTimeMillis()
+)

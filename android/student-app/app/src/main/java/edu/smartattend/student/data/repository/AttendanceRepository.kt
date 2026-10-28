@@ -67,6 +67,10 @@ class AttendanceRepository(
         return record
     }
 
+    suspend fun markAsTeacherReceived(attendanceId: String) {
+        attendanceDao.markAsTeacherReceived(attendanceId)
+    }
+
     suspend fun retryFailedRecords() {
         attendanceDao.resetFailedToPending()
     }

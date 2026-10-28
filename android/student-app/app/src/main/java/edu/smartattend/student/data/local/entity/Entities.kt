@@ -67,5 +67,6 @@ data class PendingAttendanceEntity(
     val markedAt: String,
     val syncStatus: String = "PENDING_SYNC",
     val syncRetryCount: Int = 0,
-    val lastError: String? = null
+    val lastError: String? = null,
+    val teacherReceived: Boolean = false
 )

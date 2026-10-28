@@ -1703,47 +1703,69 @@ fun HistoryScreen(
                                 }
                             }
 
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = when (r.syncStatus) {
-                                    "SYNCED" -> SuccessGreenContainer
-                                    "SYNC_FAILED" -> DangerRoseContainer
-                                    else -> WarningAmberContainer
+                            Column(horizontalAlignment = Alignment.End) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = SuccessGreenContainer
+                                ) {
+                                    Text(
+                                        text = "PRESENT",
+                                        color = SuccessGreen,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
                                 }
-                            ) {
-                                Text(
-                                    text = when (r.syncStatus) {
-                                        "SYNCED" -> "✓ SYNCED"
-                                        "SYNC_FAILED" -> "⚠ RETRYABLE"
-                                        else -> "⏳ PENDING"
-                                    },
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
                                     color = when (r.syncStatus) {
-                                        "SYNCED" -> SuccessGreen
-                                        "SYNC_FAILED" -> DangerRose
-                                        else -> WarningAmber
-                                    },
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
+                                        "SYNCED" -> SuccessGreenContainer
+                                        "SYNC_FAILED" -> DangerRoseContainer
+                                        else -> WarningAmberContainer
+                                    }
+                                ) {
+                                    Text(
+                                        text = when (r.syncStatus) {
+                                            "SYNCED" -> "✓ CLOUD SYNCED"
+                                            "SYNC_FAILED" -> "⚠ PENDING SYNC"
+                                            else -> "⏳ PENDING SYNC"
+                                        },
+                                        color = when (r.syncStatus) {
+                                            "SYNCED" -> SuccessGreen
+                                            "SYNC_FAILED" -> DangerRose
+                                            else -> WarningAmber
+                                        },
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
                         }
 
-                        // Status explanation banner
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = when (r.syncStatus) {
-                                "SYNCED" -> "Attendance synced successfully with server"
-                                "SYNC_FAILED" -> "Sync failed: ${r.lastError ?: "Network error"} — saved locally and will retry"
-                                else -> "Saved offline — waiting for sync when connection is available"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = when (r.syncStatus) {
-                                "SYNCED" -> SuccessGreen
-                                "SYNC_FAILED" -> DangerRose
-                                else -> WarningAmber
-                            }
-                        )
+                        // Status explanation banner with Teacher & Cloud status
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (r.teacherReceived || r.syncStatus == "SYNCED") "Teacher: RECEIVED (BLE)" else "Teacher: VERIFYING",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (r.teacherReceived || r.syncStatus == "SYNCED") SuccessGreen else WarningAmber
+                            )
+                            Text(
+                                text = if (r.syncStatus == "SYNCED") "Cloud: SYNCED" else "Cloud: PENDING",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (r.syncStatus == "SYNCED") SuccessGreen else WarningAmber
+                            )
+                        }
                     }
                 }
             }

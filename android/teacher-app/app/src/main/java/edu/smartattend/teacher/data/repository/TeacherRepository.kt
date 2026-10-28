@@ -1,11 +1,14 @@
 package edu.smartattend.teacher.data.repository
 
 import android.util.Log
+import edu.smartattend.teacher.ble.BleAttendanceEvent
 import edu.smartattend.teacher.data.api.StartSessionApiRequest
 import edu.smartattend.teacher.data.api.TeacherApiClient
 import edu.smartattend.teacher.data.api.TeacherLoginRequest
+import edu.smartattend.teacher.data.local.dao.BleAttendanceDao
 import edu.smartattend.teacher.data.local.dao.SessionDao
 import edu.smartattend.teacher.data.local.dao.TeacherDao
+import edu.smartattend.teacher.data.local.entity.LocalBleAttendanceEntity
 import edu.smartattend.teacher.data.local.entity.TeacherCacheEntity
 import edu.smartattend.teacher.data.local.entity.TeacherClassEntity
 import edu.smartattend.teacher.data.local.entity.TeacherSessionEntity
@@ -17,7 +20,8 @@ import java.util.*
 
 class TeacherRepository(
     private val teacherDao: TeacherDao,
-    private val sessionDao: SessionDao
+    private val sessionDao: SessionDao,
+    private val bleAttendanceDao: BleAttendanceDao? = null
 ) {
     private fun hashPassword(password: String): String {
         val bytes = MessageDigest.getInstance("SHA-256").digest(password.toByteArray())
@@ -197,16 +201,125 @@ class TeacherRepository(
 
     suspend fun getCachedTeacher(): TeacherCacheEntity? = teacherDao.getCachedTeacher()
 
-    suspend fun fetchLiveAttendance(sessionId: String, authToken: String): Result<edu.smartattend.teacher.data.api.LiveAttendanceSummaryResponse> {
+    suspend fun saveLocalBleAttendance(event: BleAttendanceEvent): Boolean {
+        android.util.Log.i("SmartAttendTeacherRepo", "INSERT START: attendanceId=${event.attendanceId}, studentId=${event.studentId}, sessionId=${event.sessionId}")
         return try {
-            val res = TeacherApiClient.apiService.getLiveAttendance(authToken, sessionId)
-            if (res.isSuccessful && res.body() != null) {
-                Result.success(res.body()!!)
-            } else {
-                Result.failure(Exception("HTTP ${res.code()}: Failed to fetch live attendance"))
+            val existing = bleAttendanceDao?.getLocalAttendanceListForSession(event.sessionId) ?: emptyList()
+            val isDuplicate = existing.any { it.attendanceId == event.attendanceId || (it.studentId.isNotBlank() && it.studentId == event.studentId) }
+            if (isDuplicate) {
+                android.util.Log.w("SmartAttendTeacherRepo", "DUPLICATE / IGNORED: Attendance already recorded for student ${event.studentId} in session ${event.sessionId}")
+                return false
             }
+
+            bleAttendanceDao?.insertBleAttendance(
+                LocalBleAttendanceEntity(
+                    attendanceId = event.attendanceId,
+                    sessionId = event.sessionId,
+                    studentId = event.studentId,
+                    rollNumber = event.rollNumber,
+                    fullName = event.fullName,
+                    markedAt = event.markedAt,
+                    bleRssi = event.bleRssi,
+                    syncStatus = "BLE_OFFLINE"
+                )
+            )
+            android.util.Log.i("SmartAttendTeacherRepo", "INSERT SUCCESS: attendanceId=${event.attendanceId} stored in Teacher Room DB")
+            true
         } catch (e: Exception) {
-            Result.failure(e)
+            android.util.Log.e("SmartAttendTeacherRepo", "INSERT FAILURE: ${e.message}", e)
+            false
         }
+    }
+
+    fun getLocalAttendanceForSession(sessionId: String): Flow<List<LocalBleAttendanceEntity>>? =
+        bleAttendanceDao?.getLocalAttendanceForSession(sessionId)
+
+    suspend fun getLocalAttendanceListForSession(sessionId: String): List<LocalBleAttendanceEntity> =
+        bleAttendanceDao?.getLocalAttendanceListForSession(sessionId) ?: emptyList()
+
+    suspend fun getMergedLiveAttendance(
+        session: TeacherSessionEntity,
+        authToken: String?
+    ): edu.smartattend.teacher.data.api.LiveAttendanceSummaryResponse {
+        val localList = getLocalAttendanceListForSession(session.sessionId)
+        val localDtos = localList.map {
+            edu.smartattend.teacher.data.api.LiveStudentAttendanceDto(
+                studentId = it.studentId,
+                rollNumber = it.rollNumber,
+                fullName = it.fullName,
+                status = "PRESENT",
+                markedAt = it.markedAt,
+                bleRssi = it.bleRssi,
+                syncStatus = it.syncStatus
+            )
+        }
+
+        // Try cloud fetch if token available
+        var cloudSummary: edu.smartattend.teacher.data.api.LiveAttendanceSummaryResponse? = null
+        if (!authToken.isNullOrBlank()) {
+            try {
+                val res = TeacherApiClient.apiService.getLiveAttendance(authToken, session.sessionId)
+                if (res.isSuccessful && res.body() != null) {
+                    cloudSummary = res.body()
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("SmartAttendTeacherRepo", "Cloud fetch unavailable (Offline mode): ${e.message}")
+            }
+        }
+
+        if (cloudSummary != null) {
+            // Merge cloud with local BLE records
+            val mergedMap = mutableMapOf<String, edu.smartattend.teacher.data.api.LiveStudentAttendanceDto>()
+            // First add cloud attendees
+            cloudSummary.attendanceList.forEach { item ->
+                mergedMap[item.studentId.ifBlank { item.rollNumber }] = item
+            }
+            // Overlay local BLE attendees (Local BLE PRESENT status always takes priority)
+            localDtos.forEach { localItem ->
+                val key = localItem.studentId.ifBlank { localItem.rollNumber }
+                val existing = mergedMap[key]
+                if (existing != null) {
+                    mergedMap[key] = existing.copy(
+                        status = "PRESENT",
+                        markedAt = (existing.markedAt ?: "").ifBlank { localItem.markedAt },
+                        bleRssi = existing.bleRssi ?: localItem.bleRssi
+                    )
+                } else {
+                    mergedMap[key] = localItem
+                }
+            }
+
+            val mergedList = mergedMap.values.toList()
+            val presentCount = mergedList.count { it.status == "PRESENT" }
+            val absentCount = mergedList.count { it.status == "ABSENT" }
+            val totalEnrolled = maxOf(cloudSummary.totalEnrolled, mergedList.size)
+
+            return cloudSummary.copy(
+                totalEnrolled = totalEnrolled,
+                presentCount = presentCount,
+                absentCount = absentCount,
+                attendanceList = mergedList
+            )
+        }
+
+        // Construct pure offline live summary
+        return edu.smartattend.teacher.data.api.LiveAttendanceSummaryResponse(
+            session = edu.smartattend.teacher.data.api.StartSessionApiResponse(
+                id = session.sessionId,
+                teacherId = "",
+                subjectId = session.subjectId,
+                classroomId = session.classroomId,
+                bleIdentifier = session.bleIdentifier,
+                rawSessionToken = session.rawSessionToken,
+                status = session.status,
+                startTime = session.startTime,
+                expiryTime = session.expiryTime
+            ),
+            totalEnrolled = localDtos.size,
+            presentCount = localDtos.size,
+            lateCount = 0,
+            absentCount = 0,
+            attendanceList = localDtos
+        )
     }
 }

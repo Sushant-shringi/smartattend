@@ -65,7 +65,7 @@ class MainActivity : ComponentActivity() {
         edu.smartattend.teacher.data.api.TeacherApiClient.init(this)
 
         val db = TeacherDatabase.getDatabase(this)
-        teacherRepository = TeacherRepository(db.teacherDao(), db.sessionDao())
+        teacherRepository = TeacherRepository(db.teacherDao(), db.sessionDao(), db.bleAttendanceDao())
         bleAdvertiserManager = BleAdvertiserManager(this)
 
         checkPermissions()
@@ -84,6 +84,78 @@ class MainActivity : ComponentActivity() {
                 var isRosterLoading by remember { mutableStateOf(false) }
 
                 val isAdvertising by bleAdvertiserManager.isAdvertising.collectAsState()
+
+                // Register real-time offline BLE attendance listener
+                DisposableEffect(activeSession?.sessionId) {
+                    bleAdvertiserManager.setOnAttendanceReceivedListener { event ->
+                        lifecycleScope.launch {
+                            val saved = teacherRepository.saveLocalBleAttendance(event)
+                            
+                            // Immediately update live summary from merged offline DB + cloud
+                            val currentActive = activeSession
+                            if (currentActive != null) {
+                                liveSummary = teacherRepository.getMergedLiveAttendance(currentActive, currentTeacher?.authToken)
+                            } else {
+                                val currentSummary = liveSummary
+                                val currentList = currentSummary?.attendanceList?.toMutableList() ?: mutableListOf()
+                                val existingIndex = currentList.indexOfFirst { it.studentId == event.studentId || it.rollNumber == event.rollNumber }
+
+                                val newItem = edu.smartattend.teacher.data.api.LiveStudentAttendanceDto(
+                                    studentId = event.studentId,
+                                    rollNumber = event.rollNumber,
+                                    fullName = event.fullName,
+                                    status = "PRESENT",
+                                    markedAt = event.markedAt,
+                                    bleRssi = event.bleRssi,
+                                    syncStatus = "BLE_OFFLINE"
+                                )
+
+                                if (existingIndex >= 0) {
+                                    currentList[existingIndex] = newItem
+                                } else {
+                                    currentList.add(0, newItem)
+                                }
+
+                                val newPresentCount = currentList.count { it.status == "PRESENT" }
+                                val newAbsentCount = currentList.count { it.status == "ABSENT" }
+
+                                liveSummary = currentSummary?.copy(
+                                    presentCount = newPresentCount,
+                                    absentCount = newAbsentCount,
+                                    attendanceList = currentList
+                                ) ?: edu.smartattend.teacher.data.api.LiveAttendanceSummaryResponse(
+                                    session = edu.smartattend.teacher.data.api.StartSessionApiResponse(
+                                        id = event.sessionId,
+                                        teacherId = "",
+                                        subjectId = "",
+                                        classroomId = "",
+                                        bleIdentifier = "",
+                                        rawSessionToken = null,
+                                        status = "ACTIVE",
+                                        startTime = event.markedAt,
+                                        expiryTime = ""
+                                    ),
+                                    totalEnrolled = currentList.size,
+                                    presentCount = newPresentCount,
+                                    lateCount = 0,
+                                    absentCount = newAbsentCount,
+                                    attendanceList = currentList
+                                )
+                            }
+
+                            TeacherNotificationHelper.notifyNewAttendee(
+                                context = this@MainActivity,
+                                studentName = event.fullName,
+                                rollNumber = event.rollNumber,
+                                subjectName = activeSession?.subjectName ?: "Attendance",
+                                status = "PRESENT",
+                                rssi = event.bleRssi,
+                                recordUniqueKey = "${event.sessionId}-${event.studentId}"
+                            )
+                        }
+                    }
+                    onDispose {}
+                }
 
                 // Day of week
                 val dayOfWeek = Calendar.getInstance().get(Calendar.DAY_OF_WEEK).let { (it + 5) % 7 }
@@ -105,25 +177,7 @@ class MainActivity : ComponentActivity() {
                     if (session != null && teacher != null) {
                         while (true) {
                             try {
-                                val res = teacherRepository.fetchLiveAttendance(session.sessionId, teacher.authToken)
-                                if (res.isSuccess) {
-                                    val summary = res.getOrNull()
-                                    liveSummary = summary
-                                    // Check for new attendees and trigger notification
-                                    summary?.attendanceList?.forEach { att ->
-                                        if (att.status == "PRESENT" || att.status == "LATE") {
-                                            TeacherNotificationHelper.notifyNewAttendee(
-                                                context = this@MainActivity,
-                                                studentName = att.fullName,
-                                                rollNumber = att.rollNumber,
-                                                subjectName = session.subjectName,
-                                                status = att.status,
-                                                rssi = att.bleRssi,
-                                                recordUniqueKey = "${session.sessionId}-${att.studentId}"
-                                            )
-                                        }
-                                    }
-                                }
+                                liveSummary = teacherRepository.getMergedLiveAttendance(session, teacher.authToken)
                             } catch (e: Exception) {
                                 // Silent retry
                             }
@@ -342,7 +396,7 @@ class MainActivity : ComponentActivity() {
                                                 if (sessionResult.isSuccess) {
                                                     val session = sessionResult.getOrNull()
                                                     activeSession = session
-                                                    bleAdvertiserManager.startAdvertising(classItem.bleIdentifier)
+                                                    bleAdvertiserManager.startAdvertising(classItem.bleIdentifier, session?.sessionId)
                                                     Toast.makeText(this@MainActivity, "BLE Broadcast Active: ${classItem.bleIdentifier}", Toast.LENGTH_SHORT).show()
                                                     navController.navigate("session")
                                                 } else {
@@ -388,7 +442,7 @@ class MainActivity : ComponentActivity() {
                                             if (isAdvertising) {
                                                 bleAdvertiserManager.stopAdvertising()
                                             } else {
-                                                bleAdvertiserManager.startAdvertising(sessionClass.bleIdentifier)
+                                                bleAdvertiserManager.startAdvertising(sessionClass.bleIdentifier, activeSession?.sessionId)
                                             }
                                         },
                                         onStopSession = {
@@ -421,11 +475,8 @@ class MainActivity : ComponentActivity() {
                                 val session = activeSession
                                 val teacher = currentTeacher
                                 LaunchedEffect(session?.sessionId, teacher?.authToken) {
-                                    if (session != null && teacher != null) {
-                                        val res = teacherRepository.fetchLiveAttendance(session.sessionId, teacher.authToken)
-                                        if (res.isSuccess) {
-                                            liveSummary = res.getOrNull()
-                                        }
+                                    if (session != null) {
+                                        liveSummary = teacherRepository.getMergedLiveAttendance(session, teacher?.authToken)
                                     }
                                 }
                                 if (session != null && teacher != null) {
@@ -438,12 +489,9 @@ class MainActivity : ComponentActivity() {
                                         onRefresh = {
                                             lifecycleScope.launch {
                                                 isRosterLoading = true
-                                                val res = teacherRepository.fetchLiveAttendance(session.sessionId, teacher.authToken)
+                                                liveSummary = teacherRepository.getMergedLiveAttendance(session, teacher.authToken)
                                                 isRosterLoading = false
-                                                if (res.isSuccess) {
-                                                    liveSummary = res.getOrNull()
-                                                    Toast.makeText(this@MainActivity, "Roster updated (${liveSummary?.presentCount ?: 0} present)", Toast.LENGTH_SHORT).show()
-                                                }
+                                                Toast.makeText(this@MainActivity, "Roster updated (${liveSummary?.presentCount ?: 0} present)", Toast.LENGTH_SHORT).show()
                                             }
                                         },
                                         onBack = { navController.popBackStack() }
@@ -474,8 +522,9 @@ class MainActivity : ComponentActivity() {
                                                     authToken = teacher.authToken
                                                 )
                                                 if (sessionResult.isSuccess) {
-                                                    activeSession = sessionResult.getOrNull()
-                                                    bleAdvertiserManager.startAdvertising(classItem.bleIdentifier)
+                                                    val session = sessionResult.getOrNull()
+                                                    activeSession = session
+                                                    bleAdvertiserManager.startAdvertising(classItem.bleIdentifier, session?.sessionId)
                                                     Toast.makeText(this@MainActivity, "BLE Broadcast Active", Toast.LENGTH_SHORT).show()
                                                     navController.navigate("session")
                                                 }

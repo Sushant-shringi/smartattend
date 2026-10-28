@@ -1,6 +1,7 @@
 package edu.smartattend.teacher.data.local.dao
 
 import androidx.room.*
+import edu.smartattend.teacher.data.local.entity.LocalBleAttendanceEntity
 import edu.smartattend.teacher.data.local.entity.TeacherCacheEntity
 import edu.smartattend.teacher.data.local.entity.TeacherClassEntity
 import edu.smartattend.teacher.data.local.entity.TeacherSessionEntity
@@ -46,4 +47,19 @@ interface SessionDao {
 
     @Query("UPDATE teacher_sessions SET status = 'STOPPED' WHERE sessionId = :sessionId")
     suspend fun stopSession(sessionId: String)
+}
+
+@Dao
+interface BleAttendanceDao {
+    @Query("SELECT * FROM local_ble_attendance WHERE sessionId = :sessionId ORDER BY receivedTimestamp DESC")
+    fun getLocalAttendanceForSession(sessionId: String): Flow<List<LocalBleAttendanceEntity>>
+
+    @Query("SELECT * FROM local_ble_attendance WHERE sessionId = :sessionId")
+    suspend fun getLocalAttendanceListForSession(sessionId: String): List<LocalBleAttendanceEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBleAttendance(record: LocalBleAttendanceEntity)
+
+    @Query("DELETE FROM local_ble_attendance WHERE sessionId = :sessionId")
+    suspend fun clearSessionAttendance(sessionId: String)
 }

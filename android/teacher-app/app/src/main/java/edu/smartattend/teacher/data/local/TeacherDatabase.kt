@@ -4,8 +4,10 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import edu.smartattend.teacher.data.local.dao.BleAttendanceDao
 import edu.smartattend.teacher.data.local.dao.SessionDao
 import edu.smartattend.teacher.data.local.dao.TeacherDao
+import edu.smartattend.teacher.data.local.entity.LocalBleAttendanceEntity
 import edu.smartattend.teacher.data.local.entity.TeacherCacheEntity
 import edu.smartattend.teacher.data.local.entity.TeacherClassEntity
 import edu.smartattend.teacher.data.local.entity.TeacherSessionEntity
@@ -14,14 +16,16 @@ import edu.smartattend.teacher.data.local.entity.TeacherSessionEntity
     entities = [
         TeacherCacheEntity::class,
         TeacherClassEntity::class,
-        TeacherSessionEntity::class
+        TeacherSessionEntity::class,
+        LocalBleAttendanceEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class TeacherDatabase : RoomDatabase() {
     abstract fun teacherDao(): TeacherDao
     abstract fun sessionDao(): SessionDao
+    abstract fun bleAttendanceDao(): BleAttendanceDao
 
     companion object {
         @Volatile

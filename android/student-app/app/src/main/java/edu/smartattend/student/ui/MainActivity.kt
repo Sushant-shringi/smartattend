@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -340,7 +341,7 @@ class MainActivity : ComponentActivity() {
                                         onStopScan = { bleScannerManager.stopScan() },
                                         onMarkOfflineAttendance = { beacon ->
                                             lifecycleScope.launch {
-                                                attendanceRepository.markAttendanceOffline(
+                                                val record = attendanceRepository.markAttendanceOffline(
                                                     sessionId = beacon.sessionId ?: selectedItem.id,
                                                     subjectId = selectedItem.subjectId,
                                                     subjectCode = selectedItem.subjectCode,
@@ -351,7 +352,30 @@ class MainActivity : ComponentActivity() {
                                                     bleRssi = beacon.rssi
                                                 )
                                                 bleScannerManager.stopScan()
-                                                Toast.makeText(this@MainActivity, "Attendance saved locally (PENDING_SYNC)", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(this@MainActivity, "Attendance saved locally: PRESENT", Toast.LENGTH_SHORT).show()
+
+                                                // Direct local BLE transmission to Teacher GATT Server (Works with zero internet!)
+                                                edu.smartattend.student.ble.BleAttendanceTransmitter.transmitAttendanceEvent(
+                                                    context = this@MainActivity,
+                                                    teacherDeviceAddress = beacon.deviceAddress,
+                                                    attendanceId = record.attendanceId,
+                                                    sessionId = record.sessionId,
+                                                    studentId = user.studentId,
+                                                    rollNumber = user.rollNumber,
+                                                    fullName = user.fullName,
+                                                    markedAt = record.markedAt,
+                                                    bleRssi = record.bleRssi
+                                                ) { success, error ->
+                                                    if (success) {
+                                                        lifecycleScope.launch {
+                                                            attendanceRepository.markAsTeacherReceived(record.attendanceId)
+                                                            Toast.makeText(this@MainActivity, "✓ Delivered to Teacher over BLE!", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    } else {
+                                                        Log.w("SmartAttendBLE", "Teacher BLE write note: $error (Will reconcile via cloud sync)")
+                                                    }
+                                                }
+
                                                 // Trigger auto-sync worker if connected
                                                 AttendanceSyncWorker.triggerImmediateSync(this@MainActivity)
                                             }

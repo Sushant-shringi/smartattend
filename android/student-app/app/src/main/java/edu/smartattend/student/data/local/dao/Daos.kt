@@ -60,6 +60,9 @@ interface AttendanceDao {
     @Query("UPDATE pending_attendance SET syncStatus = 'SYNCED', lastError = null WHERE attendanceId = :attendanceId")
     suspend fun markAsSynced(attendanceId: String)
 
+    @Query("UPDATE pending_attendance SET teacherReceived = 1 WHERE attendanceId = :attendanceId")
+    suspend fun markAsTeacherReceived(attendanceId: String)
+
     @Query("UPDATE pending_attendance SET syncStatus = 'SYNC_FAILED', lastError = :error, syncRetryCount = syncRetryCount + 1 WHERE attendanceId = :attendanceId")
     suspend fun markAsFailed(attendanceId: String, error: String)
 

@@ -1,8 +1,7 @@
 package edu.smartattend.teacher.ble
 
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
+import android.bluetooth.*
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
@@ -13,8 +12,20 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.util.*
+
+data class BleAttendanceEvent(
+    val attendanceId: String,
+    val sessionId: String,
+    val studentId: String,
+    val rollNumber: String,
+    val fullName: String,
+    val markedAt: String,
+    val bleRssi: Int?,
+    val authProof: String? = null
+)
 
 class BleAdvertiserManager(private val context: Context) {
 
@@ -25,6 +36,10 @@ class BleAdvertiserManager(private val context: Context) {
     private val advertiser: BluetoothLeAdvertiser?
         get() = bluetoothAdapter?.bluetoothLeAdvertiser
 
+    private var gattServer: BluetoothGattServer? = null
+    private var onAttendanceReceivedListener: ((BleAttendanceEvent) -> Unit)? = null
+    private var activeSessionId: String? = null
+
     private val _isAdvertising = MutableStateFlow(false)
     val isAdvertising: StateFlow<Boolean> = _isAdvertising.asStateFlow()
 
@@ -34,8 +49,9 @@ class BleAdvertiserManager(private val context: Context) {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
-    // SmartAttend BLE Service UUID (16-bit 0xFEAA compatible)
-    private val SERVICE_UUID = UUID.fromString("0000feaa-0000-1000-8000-00805f9b34fb")
+    // SmartAttend BLE Service & Characteristic UUIDs
+    val SERVICE_UUID: UUID = UUID.fromString("0000feaa-0000-1000-8000-00805f9b34fb")
+    val ATTENDANCE_CHAR_UUID: UUID = UUID.fromString("0000feab-0000-1000-8000-00805f9b34fb")
     private val PARCEL_SERVICE_UUID = ParcelUuid(SERVICE_UUID)
 
     private val advertiseCallback = object : AdvertiseCallback() {
@@ -61,9 +77,142 @@ class BleAdvertiserManager(private val context: Context) {
         }
     }
 
-    /**
-     * Checks if physical hardware supports BLE advertising.
-     */
+    private val preparedBuffers = java.util.concurrent.ConcurrentHashMap<String, java.io.ByteArrayOutputStream>()
+
+    private val gattServerCallback = object : BluetoothGattServerCallback() {
+        override fun onConnectionStateChange(device: BluetoothDevice?, status: Int, newState: Int) {
+            val stateName = when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> "CONNECTED"
+                BluetoothProfile.STATE_DISCONNECTED -> "DISCONNECTED"
+                BluetoothProfile.STATE_CONNECTING -> "CONNECTING"
+                BluetoothProfile.STATE_DISCONNECTING -> "DISCONNECTING"
+                else -> "STATE_$newState"
+            }
+            Log.i(TAG, "GATT Server Connection state change: device=${device?.address}, status=$status, newState=$stateName")
+            if (newState == BluetoothProfile.STATE_DISCONNECTED && device != null) {
+                preparedBuffers.remove(device.address)
+            }
+        }
+
+        override fun onMtuChanged(device: BluetoothDevice?, mtu: Int) {
+            Log.i(TAG, "GATT Server MTU changed: device=${device?.address}, mtu=$mtu")
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onCharacteristicWriteRequest(
+            device: BluetoothDevice?,
+            requestId: Int,
+            characteristic: BluetoothGattCharacteristic?,
+            preparedWrite: Boolean,
+            responseNeeded: Boolean,
+            offset: Int,
+            value: ByteArray?
+        ) {
+            val devAddr = device?.address ?: "UNKNOWN"
+            Log.i(TAG, "==================================================")
+            Log.i(TAG, "GATT SERVER WRITE RECEIVED")
+            Log.i(TAG, "device_address = $devAddr")
+            Log.i(TAG, "characteristic = ${characteristic?.uuid}")
+            Log.i(TAG, "payload_size = ${value?.size ?: 0} bytes (offset=$offset, prepared=$preparedWrite)")
+
+            if (characteristic?.uuid == ATTENDANCE_CHAR_UUID && value != null) {
+                if (preparedWrite || offset > 0) {
+                    val buffer = preparedBuffers.getOrPut(devAddr) { java.io.ByteArrayOutputStream() }
+                    buffer.write(value)
+                    Log.d(TAG, "GATT Server buffered ${value.size} bytes (total buffered: ${buffer.size()})")
+                    if (responseNeeded && device != null) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+                    }
+                    Log.i(TAG, "==================================================")
+                    return
+                }
+
+                // Single-packet direct write
+                val success = processAttendancePayload(value, devAddr)
+                if (responseNeeded && device != null) {
+                    val gattStatus = if (success) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_FAILURE
+                    gattServer?.sendResponse(device, requestId, gattStatus, offset, value)
+                }
+                Log.i(TAG, "==================================================")
+                return
+            }
+
+            if (responseNeeded && device != null) {
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null)
+            }
+            Log.i(TAG, "==================================================")
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onExecuteWrite(device: BluetoothDevice?, requestId: Int, execute: Boolean) {
+            val devAddr = device?.address ?: "UNKNOWN"
+            Log.i(TAG, "GATT Server onExecuteWrite: device=$devAddr, execute=$execute")
+            var success = false
+            if (execute) {
+                val buffer = preparedBuffers.remove(devAddr)
+                if (buffer != null && buffer.size() > 0) {
+                    val fullPayload = buffer.toByteArray()
+                    Log.i(TAG, "Executing write for accumulated payload: ${fullPayload.size} bytes")
+                    success = processAttendancePayload(fullPayload, devAddr)
+                }
+            } else {
+                preparedBuffers.remove(devAddr)
+                success = true
+            }
+
+            if (device != null) {
+                val gattStatus = if (success) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_FAILURE
+                gattServer?.sendResponse(device, requestId, gattStatus, 0, null)
+            }
+        }
+    }
+
+    private fun processAttendancePayload(bytes: ByteArray, devAddr: String): Boolean {
+        return try {
+            val jsonStr = String(bytes, StandardCharsets.UTF_8).trim()
+            Log.i(TAG, "✓ Received Student Attendance Event over BLE: $jsonStr")
+            val json = JSONObject(jsonStr)
+
+            val rawAttendanceId = json.optString("attendance_id", json.optString("event_id", UUID.randomUUID().toString()))
+            val rawSessionId = json.optString("session_id", "")
+            val studentId = json.optString("student_id", "")
+            val rollNumber = json.optString("roll_number", "")
+            val fullName = json.optString("full_name", "Student")
+            val markedAt = json.optString("marked_at", "")
+            val bleRssi = if (json.has("ble_rssi")) json.optInt("ble_rssi") else null
+            val authProof = if (json.has("auth_proof")) json.optString("auth_proof") else null
+
+            Log.i(TAG, "session_id = $rawSessionId")
+            Log.i(TAG, "attendance_id = $rawAttendanceId")
+            Log.i(TAG, "TEACHER ACTIVE SESSION = $activeSessionId")
+            Log.i(TAG, "RECEIVED BLE SESSION = $rawSessionId")
+
+            val effectiveSessionId = if (!activeSessionId.isNullOrBlank()) activeSessionId!! else rawSessionId
+
+            val event = BleAttendanceEvent(
+                attendanceId = rawAttendanceId,
+                sessionId = effectiveSessionId,
+                studentId = studentId,
+                rollNumber = rollNumber,
+                fullName = fullName,
+                markedAt = markedAt,
+                bleRssi = bleRssi,
+                authProof = authProof
+            )
+
+            // Notify listener immediately
+            onAttendanceReceivedListener?.invoke(event)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "BLE PAYLOAD PARSE FAILED: ${e.message} (Payload size=${bytes.size})", e)
+            false
+        }
+    }
+
+    fun setOnAttendanceReceivedListener(listener: (BleAttendanceEvent) -> Unit) {
+        this.onAttendanceReceivedListener = listener
+    }
+
     fun isBleAdvertisingSupported(): Boolean {
         return bluetoothAdapter != null &&
                bluetoothAdapter.isEnabled &&
@@ -71,10 +220,11 @@ class BleAdvertiserManager(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    fun startAdvertising(beaconIdentifier: String) {
+    fun startAdvertising(beaconIdentifier: String, sessionId: String? = null) {
         val cleanIdentifier = beaconIdentifier.trim()
         _activeBeaconName.value = cleanIdentifier
         _errorMessage.value = null
+        this.activeSessionId = sessionId
 
         val currentAdvertiser = advertiser
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
@@ -93,14 +243,18 @@ class BleAdvertiserManager(private val context: Context) {
             return
         }
 
+        // Start GATT Server to receive attendance from student devices
+        startGattServer()
+
+        // Advertise as connectable so students can write attendance to GATT characteristic
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-            .setConnectable(false)
-            .setTimeout(0) // Advertise continuously until stopped
+            .setConnectable(true) // Connectable for GATT write
+            .setTimeout(0)
             .build()
 
-        // Standard 17-byte payload: "SMARTATTEND-RM204" fits cleanly within 31-byte legacy limit
+        // Standard 17-byte payload: "SMARTATTEND-RM204"
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .addServiceUuid(PARCEL_SERVICE_UUID)
@@ -108,14 +262,11 @@ class BleAdvertiserManager(private val context: Context) {
             .build()
 
         try {
-            // Stop any existing active advertisement before starting a new one
             currentAdvertiser.stopAdvertising(advertiseCallback)
-        } catch (e: Exception) {
-            // Ignore
-        }
+        } catch (e: Exception) {}
 
         try {
-            Log.d(TAG, "Calling BluetoothLeAdvertiser.startAdvertising with identifier: $cleanIdentifier")
+            Log.d(TAG, "Calling BluetoothLeAdvertiser.startAdvertising with identifier: $cleanIdentifier (connectable=true)")
             currentAdvertiser.startAdvertising(settings, data, advertiseCallback)
         } catch (e: Exception) {
             Log.e(TAG, "Exception starting BLE advertisement: ${e.message}", e)
@@ -125,15 +276,42 @@ class BleAdvertiserManager(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
+    private fun startGattServer() {
+        if (gattServer != null || bluetoothManager == null) return
+        try {
+            gattServer = bluetoothManager.openGattServer(context, gattServerCallback)
+            val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+
+            val characteristic = BluetoothGattCharacteristic(
+                ATTENDANCE_CHAR_UUID,
+                BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
+                BluetoothGattCharacteristic.PERMISSION_WRITE
+            )
+
+            service.addCharacteristic(characteristic)
+            gattServer?.addService(service)
+            Log.i(TAG, "✓ BLE GATT Server opened with Service: $SERVICE_UUID and Characteristic: $ATTENDANCE_CHAR_UUID")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting GATT server: ${e.message}", e)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     fun stopAdvertising() {
         try {
             advertiser?.stopAdvertising(advertiseCallback)
             Log.i(TAG, "BLE advertising stopped.")
-        } catch (e: Exception) {
-            // Ignore if already stopped
-        }
+        } catch (e: Exception) {}
+
+        try {
+            gattServer?.close()
+            gattServer = null
+            Log.i(TAG, "BLE GATT Server closed.")
+        } catch (e: Exception) {}
+
         _isAdvertising.value = false
         _activeBeaconName.value = null
         _errorMessage.value = null
+        activeSessionId = null
     }
 }
