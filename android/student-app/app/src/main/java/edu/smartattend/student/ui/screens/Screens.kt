@@ -1034,10 +1034,21 @@ fun AttendanceScannerScreen(
 ) {
     var attendanceConfirmed by remember { mutableStateOf<PendingAttendanceEntity?>(null) }
 
+    // Guarantee that BLE scanning is actively running whenever this screen is visible
+    DisposableEffect(Unit) {
+        onStartScan()
+        onDispose {
+            onStopScan()
+        }
+    }
+
+    val cleanTargetBle = timetableItem.bleIdentifier.trim()
+    val cleanRoom = timetableItem.classroomName.trim()
     val matchingBeacon = discoveredBeacons.firstOrNull {
-        it.deviceName.contains(timetableItem.bleIdentifier) ||
-        it.deviceName.replace("-", "").contains(timetableItem.bleIdentifier.replace("-", "")) ||
-        it.deviceName.startsWith("SMARTATTEND")
+        it.deviceName.contains(cleanTargetBle, ignoreCase = true) ||
+        it.deviceName.replace("-", "").contains(cleanTargetBle.replace("-", ""), ignoreCase = true) ||
+        (cleanRoom.isNotBlank() && it.deviceName.contains(cleanRoom, ignoreCase = true)) ||
+        it.deviceName.startsWith("SMARTATTEND", ignoreCase = true)
     }
 
     // Pulsing radar animation
@@ -1399,7 +1410,7 @@ fun AttendanceScannerScreen(
                         )
                     }
                 } else {
-                    // WAITING STATE: Teacher has not started attendance
+                    // WAITING STATE: Searching for teacher broadcast
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(18.dp),
@@ -1412,25 +1423,34 @@ fun AttendanceScannerScreen(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = WarningAmber
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.5.dp,
+                                    color = if (isScanning) BrandTeal else WarningAmber
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(10.dp))
                                 Text(
-                                    text = "Waiting for Teacher to Start Session",
+                                    text = if (isScanning) "Searching for Teacher Beacon..." else "Radar Paused",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
                             Text(
-                                text = "No active BLE broadcast found for ${timetableItem.bleIdentifier}.\nAttendance can only be marked once your instructor starts the attendance broadcast on their phone.",
+                                text = "Target Beacon: ${timetableItem.bleIdentifier} (${timetableItem.classroomName})\nEnsure your instructor has tapped 'Start Broadcast' on their device.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
                             )
+                            Spacer(modifier = Modifier.height(14.dp))
+                            OutlinedButton(
+                                onClick = onStartScan,
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Refresh Radar Scan", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }

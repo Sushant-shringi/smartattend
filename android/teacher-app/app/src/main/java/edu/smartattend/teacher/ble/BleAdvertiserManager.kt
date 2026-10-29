@@ -62,10 +62,15 @@ class BleAdvertiserManager(private val context: Context) {
         }
 
         override fun onStartFailure(errorCode: Int) {
+            if (errorCode == ADVERTISE_FAILED_ALREADY_STARTED) {
+                Log.w(TAG, "BLE advertising is already running in Bluetooth controller. Maintaining ACTIVE status.")
+                _isAdvertising.value = true
+                _errorMessage.value = null
+                return
+            }
             val errorText = when (errorCode) {
                 ADVERTISE_FAILED_DATA_TOO_LARGE -> "ADVERTISE_FAILED_DATA_TOO_LARGE (Code 1): Broadcast payload exceeds 31-byte BLE limit."
                 ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "ADVERTISE_FAILED_TOO_MANY_ADVERTISERS (Code 2): No advertising instances available."
-                ADVERTISE_FAILED_ALREADY_STARTED -> "ADVERTISE_FAILED_ALREADY_STARTED (Code 3): Advertising is already running."
                 ADVERTISE_FAILED_INTERNAL_ERROR -> "ADVERTISE_FAILED_INTERNAL_ERROR (Code 4): Internal Bluetooth controller error."
                 ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "ADVERTISE_FAILED_FEATURE_UNSUPPORTED (Code 5): Device hardware does not support BLE advertising."
                 else -> "BLE Advertising Failed with error code: $errorCode"
@@ -222,12 +227,19 @@ class BleAdvertiserManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     fun startAdvertising(beaconIdentifier: String, sessionId: String? = null) {
         val cleanIdentifier = beaconIdentifier.trim()
-        _activeBeaconName.value = cleanIdentifier
-        _errorMessage.value = null
         this.activeSessionId = sessionId
 
-        val currentAdvertiser = advertiser
-        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
+        // If advertising is already active for this exact beacon, simply maintain active state
+        if (_isAdvertising.value && _activeBeaconName.value == cleanIdentifier) {
+            Log.i(TAG, "✓ BLE Advertising already active for $cleanIdentifier (sessionId=$sessionId)")
+            return
+        }
+
+        _activeBeaconName.value = cleanIdentifier
+        _errorMessage.value = null
+
+        val currentAdapter = bluetoothAdapter
+        if (currentAdapter == null || !currentAdapter.isEnabled) {
             val err = "Bluetooth is turned off. Please enable Bluetooth in settings."
             Log.e(TAG, err)
             _errorMessage.value = err
@@ -235,6 +247,7 @@ class BleAdvertiserManager(private val context: Context) {
             return
         }
 
+        val currentAdvertiser = advertiser
         if (currentAdvertiser == null) {
             val err = "Bluetooth LE Advertiser not available on this device."
             Log.e(TAG, err)
@@ -246,7 +259,6 @@ class BleAdvertiserManager(private val context: Context) {
         // Start GATT Server to receive attendance from student devices
         startGattServer()
 
-        // Advertise as connectable so students can write attendance to GATT characteristic
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
@@ -254,25 +266,35 @@ class BleAdvertiserManager(private val context: Context) {
             .setTimeout(0)
             .build()
 
-        // Standard 17-byte payload: "SMARTATTEND-RM204"
+        // Safely bound identifier length to guarantee fitting in legacy 31-byte advertising frame
+        val boundedIdentifier = cleanIdentifier.take(20)
+
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .addServiceUuid(PARCEL_SERVICE_UUID)
-            .addServiceData(PARCEL_SERVICE_UUID, cleanIdentifier.toByteArray(StandardCharsets.UTF_8))
+            .addServiceData(PARCEL_SERVICE_UUID, boundedIdentifier.toByteArray(StandardCharsets.UTF_8))
             .build()
 
+        val scanResponse = AdvertiseData.Builder()
+            .setIncludeDeviceName(true)
+            .build()
+
+        // Safely stop previous advertising before starting fresh
         try {
             currentAdvertiser.stopAdvertising(advertiseCallback)
         } catch (e: Exception) {}
 
-        try {
-            Log.d(TAG, "Calling BluetoothLeAdvertiser.startAdvertising with identifier: $cleanIdentifier (connectable=true)")
-            currentAdvertiser.startAdvertising(settings, data, advertiseCallback)
-        } catch (e: Exception) {
-            Log.e(TAG, "Exception starting BLE advertisement: ${e.message}", e)
-            _isAdvertising.value = false
-            _errorMessage.value = e.message
-        }
+        // Small delay ensures Android Bluetooth daemon releases previous advertising handle
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            try {
+                Log.d(TAG, "Calling BluetoothLeAdvertiser.startAdvertising with identifier: $boundedIdentifier (connectable=true)")
+                currentAdvertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
+            } catch (e: Exception) {
+                Log.e(TAG, "Exception starting BLE advertisement: ${e.message}", e)
+                _isAdvertising.value = false
+                _errorMessage.value = e.message
+            }
+        }, 120)
     }
 
     @SuppressLint("MissingPermission")
